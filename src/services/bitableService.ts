@@ -3,14 +3,28 @@ import type { FieldMeta, RecordData, Selection, FieldType } from '../types';
 
 class BitableService {
   /**
-   * 检测是否在应用模式（dashboard）中运行
-   * 应用模式下 bitable.dashboard.state 有值
+   * 异步检测是否在应用模式（dashboard）中运行
+   * 通过实际调用 bitable.dashboard.getConfig() 来判断：
+   *   - 应用模式下调用会成功（或抛出业务错误）
+   *   - 底表模式下 dashboard 对象不支持该调用，会抛出特定错误
+   * 同步的 state 属性在底表插件中也可能返回合法值，不可靠
    */
-  isDashboardMode(): boolean {
+  async isDashboardMode(): Promise<boolean> {
     try {
-      // dashboard.state 在应用模式下有值，底表模式下为 undefined 或抛出异常
       const state = bitable.dashboard?.state;
-      return state !== undefined && state !== null;
+      if (state === undefined || state === null) return false;
+      const validStates = ['Create', 'Config', 'View', 'FullScreen'];
+      if (!validStates.includes(state as string)) return false;
+      // Create 模式无法调 getConfig，但 state 合法即可确认是应用模式
+      if (state === 'Create') return true;
+
+      // 底表环境中 getConfig() 既不 resolve 也不 reject（永久挂起）
+      // 应用模式宿主会迅速响应（<100ms），超过 1000ms 即判定为底表模式
+      const result = await Promise.race([
+        bitable.dashboard.getConfig().then(() => true).catch(() => false),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1000)),
+      ]);
+      return result;
     } catch {
       return false;
     }

@@ -56,23 +56,83 @@
             </div>
             <p v-if="searchError" class="search-error">{{ searchError }}</p>
           </div>
-          <MainContent />
+          <!-- 主内容区（应用模式） -->
+          <div class="main-content">
+            <div v-if="loading" class="loading">加载中...</div>
+            <div v-else-if="error" class="error">
+              <p>{{ error }}</p>
+              <button class="btn-retry" @click="init">重试</button>
+            </div>
+            <div v-else-if="!selection" class="hint">
+              <p>请通过上方流水号搜索找到记录</p>
+            </div>
+            <template v-else>
+              <FieldSelector :fields="fields" @update:fields="onFieldsUpdate" />
+              <ExportPanel
+                :templates="templates"
+                :selectedTemplate="selectedTemplate"
+                :disabled="selectedFields.length === 0 || !!templateError"
+                :templateError="templateError"
+                @update:template="onTemplateUpdate"
+                @preview="onPreview"
+                @download="onDownload"
+              />
+              <DataPreview
+                :record="record"
+                :selectedFields="selectedFields"
+                :selectedTemplate="selectedTemplate"
+                :editedValues="editedValues"
+                :invoiceNumber="cachedInvoiceNumber"
+                @update:editedValues="onEditedValuesUpdate"
+              />
+            </template>
+          </div>
         </div>
       </div>
     </template>
   </template>
 
-  <!-- 底表模式：原有 UI -->
-  <div v-else-if="!isDashboard" class="app sidebar">
+  <!-- 底表模式 -->
+  <div v-else class="app sidebar">
     <div class="app-header">
       <h1>PDF导出工具</h1>
     </div>
-    <MainContent />
+    <!-- 主内容区（底表模式） -->
+    <div class="main-content">
+      <div v-if="loading" class="loading">加载中...</div>
+      <div v-else-if="error" class="error">
+        <p>{{ error }}</p>
+        <button class="btn-retry" @click="init">重试</button>
+      </div>
+      <div v-else-if="!selection" class="hint">
+        <p>请先在表格中选中一行记录</p>
+      </div>
+      <template v-else>
+        <FieldSelector :fields="fields" @update:fields="onFieldsUpdate" />
+        <ExportPanel
+          :templates="templates"
+          :selectedTemplate="selectedTemplate"
+          :disabled="selectedFields.length === 0 || !!templateError"
+          :templateError="templateError"
+          @update:template="onTemplateUpdate"
+          @preview="onPreview"
+          @download="onDownload"
+        />
+        <DataPreview
+          :record="record"
+          :selectedFields="selectedFields"
+          :selectedTemplate="selectedTemplate"
+          :editedValues="editedValues"
+          :invoiceNumber="cachedInvoiceNumber"
+          @update:editedValues="onEditedValuesUpdate"
+        />
+      </template>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, defineComponent, h } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { bitable, DashboardState } from '@lark-base-open/js-sdk';
 import FieldSelector from './components/FieldSelector.vue';
 import DataPreview from './components/DataPreview.vue';
@@ -98,7 +158,7 @@ const configData = ref({
 const searchSerialNumber = ref('');
 const searchError = ref<string | null>(null);
 
-const loading = ref(true);
+const loading = ref(false);
 const error = ref<string | null>(null);
 const selection = ref<Selection | null>(null);
 const fields = ref<FieldMeta[]>([]);
@@ -136,6 +196,7 @@ const searchBySerialNumber = async () => {
   }
 
   console.log('[App] 搜索流水号:', serialNum);
+  loading.value = true;
 
   try {
     // 从 customConfig 获取 tableId
@@ -168,8 +229,6 @@ const searchBySerialNumber = async () => {
     }
     console.log('[App] 找到流水号字段:', serialField.name, serialField.id);
 
-    // 用 getRecordsByPage + stringValue:true 分页拉取，每页直接返回字符串值
-    // 不需要再逐条调 getCellString，彻底避免 N 次请求
     const startTime = performance.now();
     let pageToken: string | undefined;
     let foundRecordId: string | null = null;
@@ -184,23 +243,22 @@ const searchBySerialNumber = async () => {
       pageCount++;
       console.log(`[App] 第 ${pageCount} 页，本页 ${resp.records.length} 条，hasMore: ${resp.hasMore}`);
 
-      for (const record of resp.records) {
-        const cellVal = record.fields[serialField.id];
-        // stringValue:true 时字段值是字符串或字符串数组
+      for (const rec of resp.records) {
+        const cellVal = rec.fields[serialField.id];
         const cellStr = Array.isArray(cellVal)
           ? (cellVal as any[]).map(v => String(v ?? '')).join('')
           : String(cellVal ?? '');
 
         if (cellStr.trim().includes(serialNum)) {
-          console.log('[App] 找到匹配记录:', record.recordId, '值:', cellStr.trim());
-          foundRecordId = record.recordId;
+          console.log('[App] 找到匹配记录:', rec.recordId, '值:', cellStr.trim());
+          foundRecordId = rec.recordId;
           break;
         }
       }
 
-      if (foundRecordId) break; // 找到即停止翻页
+      if (foundRecordId) break;
 
-      pageToken = resp.pageToken as string | undefined;
+      pageToken = resp.hasMore ? (resp.pageToken as string | undefined) : undefined;
     } while (pageToken);
 
     console.log('[App] 搜索完成，耗时:', (performance.now() - startTime).toFixed(0), 'ms，翻页:', pageCount);
@@ -224,6 +282,8 @@ const searchBySerialNumber = async () => {
   } catch (e) {
     console.error('[App] 搜索失败:', e);
     searchError.value = '搜索失败: ' + (e as Error).message;
+  } finally {
+    loading.value = false;
   }
 };
 
@@ -397,12 +457,9 @@ const applyTemplateFieldSelection = () => {
 };
 
 // 应用模式：配置确认
-// 关键：saveConfig 只负责保存，不调用 setRendered；
-// setRendered 应在 View 模式渲染完成后调用（由 onConfigChange 触发）
 const onConfirm = async () => {
   console.log('[App] onConfirm 开始执行...');
   try {
-    // 获取第一个表格的 tableId 存入 customConfig，供搜索功能使用
     let tableId: string | undefined;
     try {
       const tableMetaList = await bitable.base.getTableMetaList();
@@ -413,8 +470,6 @@ const onConfirm = async () => {
       console.warn('[App] 获取表格列表失败，tableId 不写入配置:', e);
     }
 
-    // 保存配置 - 本插件不依赖 dataConditions 数据绑定，传空数组
-    // customConfig 存放业务配置（含 tableId 供搜索用）
     const configToSave = {
       dataConditions: [],
       customConfig: {
@@ -427,7 +482,6 @@ const onConfirm = async () => {
 
     const saveResult = await bitable.dashboard.saveConfig(configToSave as any);
     console.log('[App] saveConfig 结果:', saveResult);
-    // 注意：saveConfig 成功后宿主会自动关闭配置面板，不需要再调用 setRendered
   } catch (e) {
     console.error('[App] 保存配置失败:', e);
     alert('保存配置失败: ' + (e as Error).message);
@@ -437,9 +491,7 @@ const onConfirm = async () => {
 // 应用模式：取消配置
 const onCancel = () => {
   // 取消时什么都不做，宿主会自行处理关闭
-  // 不要调用 setRendered，那是 View 模式专用
 };
-
 
 watch(selectedTemplate, () => {
   cachedInvoiceNumber.value = null;
@@ -452,23 +504,55 @@ watch(selectedFields, () => {
 }, { deep: true });
 
 const init = async () => {
-  // 检测运行环境
-  isDashboard.value = bitableService.isDashboardMode();
+  error.value = null;
+  selection.value = null;
+  fields.value = [];
+  record.value = null;
+
+  // 第一步：立即注册 onSelectionChange，不等模式检测，确保用户点击行不丢失
+  // 用 isSidebarMode 标志位控制：检测完成前缓存事件，检测后决定是否处理
+  let pendingSelection: Selection | null = null;
+  let modeResolved = false;
+
+  unsubscribe = bitableService.onSelectionChange(async (newSelection) => {
+    console.log('[App] onSelectionChange 回调:', newSelection);
+
+    if (modeResolved && isDashboard.value) {
+      // 应用模式下不处理行选中事件
+      return;
+    }
+
+    if (!modeResolved) {
+      // 模式还未确定时，先缓存最新选中状态
+      pendingSelection = newSelection;
+      return;
+    }
+
+    // 底表模式：处理选中变化
+    await handleSelectionChange(newSelection);
+  });
+
+  // 第二步：异步检测模式（getConfig 可能有延迟）
+  isDashboard.value = await bitableService.isDashboardMode();
+  modeResolved = true;
   console.log('[App] 运行模式:', isDashboard.value ? '应用模式' : '底表模式');
 
   if (isDashboard.value) {
-    // 检查 dashboard 状态：直接用枚举比较，不依赖字符串
+    // 应用模式：不需要行选中监听，取消注册
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
+    }
+
+    // ===== 应用模式初始化 =====
     const state = bitable.dashboard.state;
     console.log('[App] Dashboard 状态:', state);
     const isCreate = state === DashboardState.Create;
     const isConfigState = state === DashboardState.Config || isCreate;
     isConfigMode.value = isConfigState;
-    console.log('[App] isConfigMode:', isConfigMode.value);
 
-    // 监听配置变化（Config 和 View 模式下都需要监听）
-    // 在 View 模式下：onConfigChange 触发时说明宿主已完成截图准备，此时可以更新渲染并调用 setRendered
     bitable.dashboard.onConfigChange(async (event) => {
-      console.log('[App] 配置变化事件 (onConfigChange):', event.data);
+      console.log('[App] 配置变化事件:', event.data);
       const cfg = event.data;
       if (cfg?.customConfig) {
         configData.value = {
@@ -477,25 +561,20 @@ const init = async () => {
         };
         selectedTemplate.value = configData.value.defaultTemplate;
       }
-      // View 模式下收到配置变化（saveConfig 后宿主会推送）即可告知渲染完成
       if (!isConfigMode.value) {
-        console.log('[App] View 模式收到配置变化，调用 setRendered');
         await bitable.dashboard.setRendered();
       }
     });
 
-    // Create 模式下直接显示配置界面，不调用 getConfig，也不调用 setRendered
     if (isCreate) {
-      console.log('[App] Create 模式，等待用户配置');
+      console.log('[App] Create 模式');
       return;
     }
 
-    // Config 模式下：显示配置界面，可以读取已有配置预填表单
     if (isConfigState) {
-      console.log('[App] Config 模式，读取已有配置预填表单');
+      console.log('[App] Config 模式');
       try {
         const config = await bitable.dashboard.getConfig();
-        console.log('[App] 已有配置:', config);
         if (config?.customConfig) {
           configData.value = {
             pluginName: (config.customConfig as any).pluginName || 'PDF导出工具',
@@ -503,16 +582,14 @@ const init = async () => {
           };
         }
       } catch (e) {
-        console.error('[App] Config 模式获取已有配置失败（可忽略）:', e);
+        console.error('[App] Config 模式获取配置失败:', e);
       }
       return;
     }
 
-    // View / FullScreen 模式：初始化获取已有配置，然后渲染，最后调用 setRendered
+    // View / FullScreen
     try {
       const config = await bitable.dashboard.getConfig();
-      console.log('[App] View 模式初始配置:', config);
-
       if (config?.customConfig) {
         configData.value = {
           pluginName: (config.customConfig as any).pluginName || 'PDF导出工具',
@@ -521,47 +598,52 @@ const init = async () => {
         selectedTemplate.value = configData.value.defaultTemplate;
       }
     } catch (e) {
-      console.error('[App] 获取初始配置失败:', e);
+      console.error('[App] View 模式获取配置失败:', e);
     }
 
-    // View 模式下告知宿主渲染完成（可截图）
-    console.log('[App] View 模式，调用 setRendered');
     await bitable.dashboard.setRendered();
+    return;
   }
 
-  loading.value = true;
-  error.value = null;
-
-  // 监听选中变化（底表模式有效）
-  unsubscribe = bitableService.onSelectionChange((newSelection) => {
-    console.log('[App] onSelectionChange 回调:', newSelection);
-    if (newSelection && newSelection.recordId) {
-      selection.value = newSelection;
-      bitableService.getFieldList(newSelection.tableId).then(newFields => {
-        fields.value = newFields.map(f => ({ ...f, selected: false }));
-        applyTemplateFieldSelection();
-      });
+  // ===== 底表模式初始化 =====
+  // 检测期间若有缓存的点击事件，直接使用；否则主动查询当前选中状态
+  const initialSelection = pendingSelection ?? await (async () => {
+    try {
+      loading.value = true;
+      const sel = await bitableService.getSelection();
+      console.log('[App] 初始选中状态:', sel);
+      return sel;
+    } catch (e) {
+      console.error('[App] 获取初始选中失败:', e);
+      return null;
+    } finally {
+      loading.value = false;
     }
-  });
+  })();
 
-  // 尝试获取初始选中状态
-  try {
-    const sel = await bitableService.getSelection();
-    console.log('[App] 初始选中状态:', sel);
+  if (initialSelection) {
+    await handleSelectionChange(initialSelection);
+  }
+};
 
-    if (sel && sel.recordId) {
-      selection.value = sel;
-      const fieldList = await bitableService.getFieldList(sel.tableId);
-      fields.value = fieldList.map(f => ({ ...f, selected: false }));
+// 底表模式：处理选中行变化
+const handleSelectionChange = async (newSelection: Selection | null) => {
+  if (newSelection && newSelection.recordId) {
+    selection.value = newSelection;
+    loading.value = true;
+    try {
+      const newFields = await bitableService.getFieldList(newSelection.tableId);
+      fields.value = newFields.map(f => ({ ...f, selected: false }));
       applyTemplateFieldSelection();
-    } else {
-      selection.value = null;
+    } catch (e) {
+      console.error('[App] 获取字段失败:', e);
+    } finally {
+      loading.value = false;
     }
-  } catch (e) {
-    console.error('[App] 获取初始选中失败:', e);
-    error.value = '初始化失败，请检查网络连接';
-  } finally {
-    loading.value = false;
+  } else {
+    selection.value = null;
+    fields.value = [];
+    record.value = null;
   }
 };
 
@@ -570,46 +652,6 @@ onMounted(init);
 onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
-  }
-});
-
-// 主内容组件
-const MainContent = defineComponent({
-  name: 'MainContent',
-  setup() {
-    return () => h('div', { class: 'main-content' }, [
-      loading.value ? h('div', { class: 'loading' }, '加载中...') :
-      error.value ? h('div', { class: 'error' }, [
-        h('p', error.value),
-        h('button', { class: 'btn-retry', onClick: init }, '重试')
-      ]) :
-      !selection.value ? h('div', { class: 'error' }, [
-        h('p', '请先在表格中选中一行记录')
-      ]) :
-      [
-        h(FieldSelector, {
-          fields: fields.value,
-          'onUpdate:fields': onFieldsUpdate
-        }),
-        h(ExportPanel, {
-          templates: templates,
-          selectedTemplate: selectedTemplate.value,
-          disabled: selectedFields.value.length === 0 || !!templateError.value,
-          templateError: templateError.value,
-          'onUpdate:template': onTemplateUpdate,
-          onPreview: onPreview,
-          onDownload: onDownload
-        }),
-        h(DataPreview, {
-          record: record.value,
-          selectedFields: selectedFields.value,
-          selectedTemplate: selectedTemplate.value,
-          editedValues: editedValues.value,
-          invoiceNumber: cachedInvoiceNumber.value,
-          'onUpdate:editedValues': onEditedValuesUpdate
-        })
-      ]
-    ]);
   }
 });
 </script>
@@ -648,6 +690,13 @@ const MainContent = defineComponent({
   text-align: center;
   padding: 20px;
   color: #f56c6c;
+}
+
+.hint {
+  text-align: center;
+  padding: 40px 20px;
+  color: #999999;
+  font-size: 14px;
 }
 
 .btn-retry {
