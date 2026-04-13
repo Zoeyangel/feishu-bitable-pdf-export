@@ -69,7 +69,7 @@ function generateInvoiceHTML(
     const shipTo = getValueByField('Ship to');
     const shippingMethod = getValueByField('Shipping method');
     const products = getValueByField('PRODUCTS');
-    const description = getValueByField('Description');
+    const description = getValueByField('Description(颜色/印刷等)');
     const qty = getValueByField('QTY');
     const unitPrice = getValueByField('UNIT PRICE');
     const amount = getValueByField('Amount');
@@ -137,8 +137,8 @@ All fees are listed in USD and are subject to sales tax (as applicable).`;
             <td style="vertical-align: top; width: 50%; padding-left: 20px;">
               <div style="font-weight: bold; margin-bottom: 8px; color: #000; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #ccc; padding-bottom: 4px;">Ship to:</div>
               <div style="font-size: 9pt; color: #333; line-height: 1.7; white-space: pre-line; padding-top: 6px;">${shipTo}</div>
-              <div style="font-weight: bold; margin-top: 15px; margin-bottom: 6px; color: #000; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #ccc; padding-bottom: 4px;">Shipping method:</div>
-              <div style="font-size: 9pt; color: #333; line-height: 1.7; padding-top: 6px;">${shippingMethod}</div>
+              ${shippingMethod ? `<div style="font-weight: bold; margin-top: 15px; margin-bottom: 6px; color: #000; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #ccc; padding-bottom: 4px;">Shipping method:</div>
+              <div style="font-size: 9pt; color: #333; line-height: 1.7; padding-top: 6px;">${shippingMethod}</div>` : ''}
             </td>
           </tr>
         </table>
@@ -219,8 +219,8 @@ export const InvoiceTemplate: IPDFTemplate = {
   description: '发票模板，包含公司信息、账单明细等',
   fields: {
     required: ['PO number', 'Bill to', 'Ship to', 'PRODUCTS', 'QTY', 'UNIT PRICE', 'Amount', 'Subtotal', 'Total'],
-    optional: ['In-hand Date', 'Firm', 'Shipping method', 'Description', 'Setup QTY', 'Setup Charge', 'AMOUNT 2', 'Shipping Cost'],
-    editable: ['PO number', 'Bill to', 'Ship to', 'PRODUCTS', 'QTY', 'UNIT PRICE', 'Description', 'Shipping method', 'Setup QTY', 'Setup Charge'],
+    optional: ['In-hand Date', 'Firm', 'Shipping method', 'Description(颜色/印刷等)', 'Setup QTY', 'Setup Charge', 'AMOUNT 2', 'Shipping Cost'],
+    editable: ['PO number', 'Bill to', 'Ship to', 'PRODUCTS', 'QTY', 'UNIT PRICE', 'Description(颜色/印刷等)', 'Shipping method', 'Setup QTY', 'Setup Charge'],
     amountFields: ['Subtotal', 'Total', 'Amount', 'AMOUNT 2', 'Shipping Cost', 'UNIT PRICE', 'Setup Charge'],
   },
   generate(data: RecordData, editedValues?: Record<string, string>): string {

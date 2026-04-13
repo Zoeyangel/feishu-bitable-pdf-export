@@ -16,3 +16,10 @@ body {
   padding: 16px;
   min-height: 100vh;
 }
+
+/* 应用模式下减少 padding */
+#app:has(.compact-trigger) {
+  padding: 8px;
+  display: flex;
+  align-items: flex-start;
+}

@@ -3,6 +3,20 @@ import type { FieldMeta, RecordData, Selection, FieldType } from '../types';
 
 class BitableService {
   /**
+   * 检测是否在应用模式（dashboard）中运行
+   * 应用模式下 bitable.dashboard.state 有值
+   */
+  isDashboardMode(): boolean {
+    try {
+      // dashboard.state 在应用模式下有值，底表模式下为 undefined 或抛出异常
+      const state = bitable.dashboard?.state;
+      return state !== undefined && state !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * 获取当前选中信息
    */
   async getSelection(): Promise<Selection | null> {
@@ -120,30 +134,74 @@ class BitableService {
   /**
    * 获取指定字段在所有记录中的值列表
    * 用于统计 PI 号最大值
-   * 优化：使用 Promise.all 并行获取，避免串行等待
+   * 优化：使用分页 API 获取所有记录，避免 200 条限制
    */
   async getAllFieldValues(tableId: string, fieldId: string): Promise<string[]> {
     try {
       console.log('[bitableService] getAllFieldValues 开始, tableId:', tableId, 'fieldId:', fieldId);
       const table = await bitable.base.getTableById(tableId);
-      const records = await table.getRecordIdList();
-      console.log('[bitableService] 获取到记录数:', records.length);
 
-      // 并行获取所有记录的值（性能优化）
-      const valuePromises = records.map(recordId =>
-        table.getCellString(fieldId, recordId).catch(() => '')
-      );
-      const allResults = await Promise.all(valuePromises);
+      // 用 getRecordsByPage + stringValue:true，一次请求拿一整页所有字段的字符串值
+      // 不再逐条 getCellString
+      const values: string[] = [];
+      let pageToken: string | undefined;
 
-      // 过滤非空值
-      const values = allResults
-        .filter(value => value && value.trim())
-        .map(value => value.trim());
+      do {
+        const response = await table.getRecordsByPage({
+          pageSize: 200,
+          pageToken,
+          stringValue: true,
+        });
 
-      console.log('[bitableService] 最终返回的非空值:', values);
+        for (const record of response.records) {
+          const cellVal = record.fields[fieldId];
+          const str = Array.isArray(cellVal)
+            ? (cellVal as any[]).map(v => String(v ?? '')).join('')
+            : String(cellVal ?? '');
+          const trimmed = str.trim();
+          if (trimmed) values.push(trimmed);
+        }
+
+        pageToken = response.hasMore ? (response.pageToken as string | undefined) : undefined;
+        console.log('[bitableService] 分页获取，当前累计非空值:', values.length, 'hasMore:', response.hasMore);
+      } while (pageToken);
+
+      console.log('[bitableService] 最终返回的非空值数量:', values.length);
       return values;
     } catch (error) {
       console.error('[bitableService] 获取所有记录字段值失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 分页获取所有记录 ID
+   * 用于应用模式下搜索记录
+   */
+  async getAllRecordIds(tableId: string): Promise<string[]> {
+    try {
+      console.log('[bitableService] getAllRecordIds 开始, tableId:', tableId);
+      const table = await bitable.base.getTableById(tableId);
+
+      const allRecordIds: string[] = [];
+      let pageToken: string | undefined;
+      let pageCount = 0;
+
+      do {
+        const response = await table.getRecordIdListByPage({
+          pageToken,
+          pageSize: 200,
+        });
+        allRecordIds.push(...response.recordIds);
+        pageToken = response.hasMore ? (response.pageToken as string | undefined) : undefined;
+        pageCount++;
+        console.log(`[bitableService] 分页 ${pageCount}: 获取 ${response.recordIds.length} 条，累计 ${allRecordIds.length} 条，hasMore: ${response.hasMore}`);
+      } while (pageToken);
+
+      console.log('[bitableService] 总记录数:', allRecordIds.length);
+      return allRecordIds;
+    } catch (error) {
+      console.error('[bitableService] 获取所有记录 ID 失败:', error);
       return [];
     }
   }
